@@ -14,7 +14,6 @@ const TOKEN = process.env.ULTRAMSG_TOKEN || 'vf4yh08blkp6dq89';
 
 const processedOrders = [];
 
-// Fraud & Serial Refuser Engine
 const KNOWN_SERIAL_REFUSERS = new Set([
   '21650999112', '21655889001', '21622998877'
 ]);
@@ -59,7 +58,7 @@ function sendUltraMsg(to, body) {
 
 // Health Check
 app.get('/', (req, res) => {
-  res.json({ status: 'ONLINE', service: 'CODShield API', instance: INSTANCE_ID, connected: true });
+  res.json({ status: 'ONLINE', service: 'CODShield API (Arabic)', instance: INSTANCE_ID, connected: true });
 });
 
 // Converty Webhook (Receives Orders from Store)
@@ -70,33 +69,35 @@ app.post('/api/v1/converty/webhook', async (req, res) => {
     const customer = payload.customer || {};
     const rawPhone = payload.phone || customer.phone || payload.shipping_address?.phone || '';
     const normalizedPhone = normalizeTunisianPhone(rawPhone);
-    const customerName = payload.customer_name || customer.name || customer.first_name || 'Client';
+    const customerName = payload.customer_name || customer.name || customer.first_name || 'حريفنا الكريم';
 
-    let productName = 'Votre commande';
+    let productName = 'طلبكم';
     if (payload.line_items && payload.line_items.length > 0) {
-      productName = payload.line_items.map(item => `${item.quantity || 1}x ${item.title || item.name}`).join(', ');
+      productName = payload.line_items.map(item => `${item.quantity || 1}x ${item.title || item.name}`).join('، ');
     } else if (payload.product_name) {
       productName = payload.product_name;
     }
 
     const totalAmount = payload.total_price || payload.total || '0.000';
-    const city = payload.city || payload.shipping_address?.city || 'Tunisie';
+    const city = payload.city || payload.shipping_address?.city || 'تونس';
 
     const screening = calculateBuyerTrustScore(normalizedPhone);
     if (screening.riskLevel === 'HIGH_RISK_SERIAL_REFUSER') {
       return res.status(200).json({ status: 'BLOCKED_FRAUD', orderId, trustScore: screening.trustScore });
     }
 
-    const messageBody = `👋 Aslema ${customerName} !
+    // Arabic Confirmation Message
+    const messageBody = `أهلاً وسهلاً بك ${customerName} ! 👋
 
-Merci pour votre commande :
-📦 Produit : *${productName}*
-💵 Total à payer : *${totalAmount} TND* (Paiement à la livraison)
-📍 Destination : *${city}*
+شكراً لطلبك من متجرنا:
+📦 المنتج: *${productName}*
+💵 المبلغ الإجمالي: *${totalAmount} د.ت* (الدفع عند الاستلام)
+📍 الوجهة: *${city}*
 
-Pour préparer et expédier votre colis aujourd'hui :
-👉 Répondez *1* pour *Confirmer la commande* ✅
-👉 Répondez *2* si *Vous avez une question (Rappelez-moi)* 📞`;
+لقد استلمنا طلبك ونود التأكد مما إذا كنت ترغب في تأكيده للبدء في تجهيزه وشحنه:
+
+👉 أرسل *1* لـ *تأكيد الطلب* ✅
+👉 أرسل *2* إذا كنت *تريد مكالمة هاتفية لطرح استفساراتكم* 📞`;
 
     const waResponse = await sendUltraMsg(`+${normalizedPhone}`, messageBody);
     processedOrders.unshift({ orderId, customerName, phone: normalizedPhone, status: 'AWAITING_REPLY' });
@@ -107,18 +108,28 @@ Pour préparer et expédier votre colis aujourd'hui :
   }
 });
 
-// UltraMsg Inbound (Customer replies 1 or 2 on WhatsApp)
+// UltraMsg Inbound (Customer replies 1 or 2 on WhatsApp in Arabic)
 app.post('/api/v1/ultramsg/webhook', async (req, res) => {
   try {
     const data = req.body?.data || req.body;
     const from = (data.from || '').replace(/\D/g, '');
     const text = (data.body || '').trim().toLowerCase();
 
-    if (text === '1' || text.includes('confirme') || text.includes('oui')) {
-      await sendUltraMsg(`+${from}`, `Parfait ! Votre commande est bien confirmée 🎉\n\nPour que le livreur trouve facilement votre porte, vous pouvez nous envoyer votre *localisation GPS 📍* ou un point de repère.`);
-    } else if (text === '2' || text.includes('question') || text.includes('rappel') || text.includes('appel')) {
-      await sendUltraMsg(`+${from}`, `Demande de rappel enregistrée ! 📞\n\nUn conseiller va vous appeler dans quelques instants pour répondre à toutes vos questions avant l'expédition.`);
+    // Option 1: Confirm order
+    if (text === '1' || text.includes('نعم') || text.includes('تاكيد') || text.includes('تأكيد') || text.includes('oui') || text.includes('confirme')) {
+      const confirmReply = `ممتاز! تم تأكيد طلبك بنجاح 🎉
+
+لضمان وصول عامل التوصيل إلى باب منزلك بكل سهولة ودون إزعاج، يُرجى إرسال *موقعك عبر GPS 📍* أو توضيح نقطة قريبة معروفة.`;
+      await sendUltraMsg(`+${from}`, confirmReply);
+
+    // Option 2: Wants a call
+    } else if (text === '2' || text.includes('اتصال') || text.includes('كلموني') || text.includes('سؤال') || text.includes('استفسار') || text.includes('appel')) {
+      const callReply = `تم تسجيل طلبك بنجاح! 📞
+
+سيقوم فريق خدمة العملاء بالاتصال بك في أقرب وقت ممكن للإجابة على جميع استفساراتك قبل شحن الطلب. شكراً لتواصلك معنا 😊`;
+      await sendUltraMsg(`+${from}`, callReply);
     }
+
     res.status(200).send('OK');
   } catch (err) {
     res.status(500).send('Error');
@@ -126,5 +137,5 @@ app.post('/api/v1/ultramsg/webhook', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`🛡️ CODShield Engine running on port ${PORT}`);
+  console.log(`🛡️ CODShield Engine (Arabic) running on port ${PORT}`);
 });
